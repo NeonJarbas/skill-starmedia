@@ -105,6 +105,11 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
 
     @ocp_featured_media()
     def featured_media(self):
+        if self.lang.startswith("ru"):
+            return self.featured_media_en() + self.featured_media_ru()
+        return self.featured_media_en()
+
+    def featured_media_en(self):
         return [{
             "title": video["title"],
             "image": video["thumbnail"],
@@ -116,6 +121,19 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
             "bg_image": video["thumbnail"],
             "skill_id": self.skill_id
         } for video in self.archive.sorted_entries()]
+
+    def featured_media_ru(self):
+        return [{
+            "title": video["title"],
+            "image": video["thumbnail"],
+            "match_confidence": 70,
+            "media_type": MediaType.MOVIE,
+            "uri": "youtube//" + video["url"],
+            "playback": PlaybackType.VIDEO,
+            "skill_icon": self.skill_icon,
+            "bg_image": video["thumbnail"],
+            "skill_id": self.skill_id
+        } for video in self.archive_ru.sorted_entries()]
 
 
 def create_skill():
