@@ -1,5 +1,5 @@
 from os.path import join, dirname
-
+import random
 from ovos_plugin_common_play.ocp import MediaType, PlaybackType
 from ovos_utils.log import LOG
 from ovos_utils.parse import fuzzy_match
@@ -21,17 +21,27 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
                                                           "movie clip", "behind the scenes",
                                                           "Movie Preview",
                                                           "soundtrack", " OST", "opening theme"])
+        self.archive_ru = YoutubeMonitor(db_name="StarMedia_ru",
+                                      min_duration=30 * 60,
+                                      logger=LOG,
+                                      blacklisted_kwords=["trailer", "teaser", "movie scene",
+                                                          "movie clip", "behind the scenes",
+                                                          "Movie Preview",
+                                                          "soundtrack", " OST", "opening theme"])
 
     def initialize(self):
+        bootstrap = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap.json"
+        self.archive.bootstrap_from_url(bootstrap)
+        bootstrap_ru = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap_ru.json"
+        self.archive.bootstrap_from_url(bootstrap_ru)
+        self.schedule_event(self._sync_db, random.randint(3600, 24 * 3600))
+
+    def _sync_db(self):
         url = "https://www.youtube.com/channel/UCuSx-lf2ft7hPceGVNHybOw"  # english subs
         ru_url = "https://www.youtube.com/user/starmedia"  # russian only
-        bootstrap = f"https://raw.githubusercontent.com/OpenJarbas/streamindex/main/{self.archive.db.name}.json"
-        self.archive.bootstrap_from_url(bootstrap)
-        self.archive.monitor(url)
-        if self.lang.startswith("ru"):
-            self.archive.monitor(ru_url)
-        self.archive.setDaemon(True)
-        self.archive.start()
+        self.archive.parse_videos(url)
+        self.archive_ru.parse_videos(ru_url)
+        self.schedule_event(self._sync_db, random.randint(3600, 24*3600))
 
     # matching
     def match_skill(self, phrase, media_type):
