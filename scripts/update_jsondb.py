@@ -32,12 +32,12 @@ if isfile(cache_file):
     shutil.rmtree(cache_file, ignore_errors=True)
 
 for url in [
-     "https://www.youtube.com/channel/UCuSx-lf2ft7hPceGVNHybOw"
+    "https://www.youtube.com/channel/UCuSx-lf2ft7hPceGVNHybOw"
 ]:
     # parse new vids
     archive.parse_videos(url)
 for url in [
-     "https://www.youtube.com/user/starmedia"
+    "https://www.youtube.com/user/starmedia"
 ]:
     # parse new vids
     archive_ru.parse_videos(url)

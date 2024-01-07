@@ -1,73 +1,84 @@
-from os.path import join, dirname
 import random
-from ovos_plugin_common_play.ocp import MediaType, PlaybackType
-from ovos_utils.log import LOG
-from ovos_utils.parse import fuzzy_match
-from ovos_workshop.skills.common_play import OVOSCommonPlaybackSkill, \
-    ocp_search, ocp_featured_media
-from youtube_archivist import YoutubeMonitor
+from os.path import join, dirname
+
+import requests
+from json_database import JsonStorageXDG
+
+from ovos_utils.ocp import MediaType, PlaybackType
+from ovos_workshop.decorators.ocp import ocp_search, ocp_featured_media
+from ovos_workshop.skills.common_play import OVOSCommonPlaybackSkill
 
 
 class StarMediaSkill(OVOSCommonPlaybackSkill):
-    def __init__(self):
-        super().__init__("StarMedia")
+    def __init__(self, *args, **kwargs):
         self.supported_media = [MediaType.MOVIE,
-                                MediaType.GENERIC]
+                                MediaType.DOCUMENTARY,
+                                MediaType.VIDEO_EPISODES]
         self.skill_icon = self.default_bg = join(dirname(__file__), "ui", "starmedia_icon.jpg")
-        self.archive = YoutubeMonitor(db_name="StarMedia",
-                                      min_duration=30 * 60,
-                                      logger=LOG,
-                                      blacklisted_kwords=["trailer", "teaser", "movie scene",
-                                                          "movie clip", "behind the scenes",
-                                                          "Movie Preview",
-                                                          "soundtrack", " OST", "opening theme"])
-        self.archive_ru = YoutubeMonitor(db_name="StarMedia_ru",
-                                      min_duration=30 * 60,
-                                      logger=LOG,
-                                      blacklisted_kwords=["trailer", "teaser", "movie scene",
-                                                          "movie clip", "behind the scenes",
-                                                          "Movie Preview",
-                                                          "soundtrack", " OST", "opening theme"])
+        self.archive = JsonStorageXDG("StarMedia", subfolder="OCP")
+        self.archive_ru = JsonStorageXDG("StarMedia_ru", subfolder="OCP")
+        self.media_type_exceptions = {}
+        super().__init__(*args, **kwargs)
 
     def initialize(self):
-        bootstrap = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap.json"
-        self.archive.bootstrap_from_url(bootstrap)
-        bootstrap_ru = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap_ru.json"
-        self.archive.bootstrap_from_url(bootstrap_ru)
-        self.schedule_event(self._sync_db, random.randint(3600, 24 * 3600))
+        self._sync_db()
+        self.load_ocp_keywords()
 
     def _sync_db(self):
-        url = "https://www.youtube.com/channel/UCuSx-lf2ft7hPceGVNHybOw"  # english subs
-        ru_url = "https://www.youtube.com/user/starmedia"  # russian only
-        self.archive.parse_videos(url)
-        self.archive_ru.parse_videos(ru_url)
-        self.schedule_event(self._sync_db, random.randint(3600, 24*3600))
+        bootstrap = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap.json"
+        data = requests.get(bootstrap).json()
+        self.archive.merge(data)
+        bootstrap = "https://github.com/JarbasSkills/skill-starmedia/raw/dev/bootstrap_ru.json"
+        data = requests.get(bootstrap).json()
+        self.archive_ru.merge(data)
+        self.schedule_event(self._sync_db, random.randint(3600, 24 * 3600))
 
-    # matching
-    def match_skill(self, phrase, media_type):
-        score = 0
-        if self.voc_match(phrase, "movie") or media_type == MediaType.MOVIE:
-            score += 10
-        if self.voc_match(phrase, "maverick"):
-            score += 50
-        return score
+    def load_ocp_keywords(self):
+        title = []
+        series = []
+        docus = []
 
-    def normalize_title(self, title):
-        title = title.lower().strip()
-        title = self.remove_voc(title, "maverick")
-        title = self.remove_voc(title, "movie")
-        title = title.replace("|", "").replace('"', "") \
-            .replace(':', "").replace('”', "").replace('“', "") \
-            .strip()
-        return " ".join(
-            [w for w in title.split(" ") if w])  # remove extra spaces
+        genre = ["russian", "war"]
 
-    def calc_score(self, phrase, match, base_score=0):
-        score = base_score
-        score += 100 * fuzzy_match(phrase.lower(), match["title"].lower())
-        return min(100, score)
+        if any(l.startswith("ru-") for l in self.native_langs):
+            db = list(self.archive.values()) + list(self.archive_ru.values())
+        else:
+            db = self.archive.values()
 
-    def get_playlist(self, score=50, num_entries=250):
+        for data in db:
+            t = data["title"].replace("★English Version★", "")
+            if any(w in t.lower() for w in ["documentar", "docudrama"]):
+                t = t.split(".")[0].split("-")[0].split("(")[0].strip()
+                docus.append(t)
+                self.media_type_exceptions[data["url"]] = MediaType.DOCUMENTARY
+            elif "series" in t.lower() or "episode" in t.lower():
+                t = t.split(".")[0].split("-")[0].split("(")[0].strip()
+                series.append(t)
+                self.media_type_exceptions[data["url"]] = MediaType.VIDEO_EPISODES
+            else:
+                t = t.split(".")[0].split("-")[0].split("(")[0].strip()
+                if '"' in t:
+                    t = t.split('"')[1]
+                if "/" in t:
+                    t1, t2 = t.split("/")
+                    title.append(t1.strip())
+                    title.append(t2.strip())
+                title.append(t.strip())
+
+        self.register_ocp_keyword(MediaType.MOVIE,
+                                  "movie_name", title)
+        self.register_ocp_keyword(MediaType.DOCUMENTARY,
+                                  "documentary_name", docus)
+        self.register_ocp_keyword(MediaType.VIDEO_EPISODES,
+                                  "series_name", series)
+        self.register_ocp_keyword(MediaType.MOVIE,
+                                  "film_genre", genre)
+        self.register_ocp_keyword(MediaType.MOVIE,
+                                  "movie_streaming_provider",
+                                  ["StarMedia",
+                                   "Star Media"])
+
+    def get_playlist(self, score=50, num_entries=25):
         pl = self.featured_media()[:num_entries]
         return {
             "match_confidence": score,
@@ -83,33 +94,95 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
 
     @ocp_search()
     def search_db(self, phrase, media_type):
-        base_score = self.match_skill(phrase, media_type)
-        if self.voc_match(phrase, "starmedia"):
-            yield self.get_playlist(base_score)
-        if media_type == MediaType.MOVIE:
-            # only search db if user explicitly requested movies
-            phrase = self.normalize_title(phrase)
-            for url, video in self.archive.db.items():
+        base_score = 15 if media_type == MediaType.MOVIE else 0
+        entities = self.ocp_voc_match(phrase)
+
+        # russian media, bonus if russian is a native lang
+        if any(l.startswith("ru-") for l in self.native_langs):
+            base_score += 15
+
+        skill = "movie_streaming_provider" in entities  # skill matched
+
+        base_score += 30 * len(entities)
+        title = entities.get("movie_name")
+        dtitle = entities.get("documentary_name")
+        stitle = entities.get("series_name")
+
+        if media_type == MediaType.DOCUMENTARY:
+            candidates = [video for video in self.archive.values()
+                          if self.media_type_exceptions.get(video["url"], MediaType.MOVIE) ==
+                          MediaType.DOCUMENTARY]
+        elif media_type == MediaType.VIDEO_EPISODES:
+            candidates = [video for video in self.archive.values()
+                          if self.media_type_exceptions.get(video["url"], MediaType.MOVIE) ==
+                          MediaType.VIDEO_EPISODES]
+
+        else:
+            candidates = [video for video in self.archive.values()
+                          if video["url"] not in self.media_type_exceptions]
+
+        # movies
+        if title:
+            base_score += 30
+            candidates = [video for video in candidates
+                          if title.lower() in video["title"].lower()]
+            for video in candidates:
                 yield {
                     "title": video["title"],
-                    "author": "Full Free Films",
-                    "match_confidence": self.calc_score(phrase, video, base_score),
+                    "author": video["author"],
+                    "match_confidence": min(100, base_score),
                     "media_type": MediaType.MOVIE,
-                    "uri": "youtube//" + url,
+                    "uri": "youtube//" + video["url"],
                     "playback": PlaybackType.VIDEO,
                     "skill_icon": self.skill_icon,
                     "skill_id": self.skill_id,
                     "image": video["thumbnail"],
-                    "bg_image": self.default_bg
+                    "bg_image": video["thumbnail"]
                 }
+
+        # series
+        if stitle:
+            base_score += 30
+            candidates = [video for video in candidates
+                          if stitle.lower() in video["title"].lower()]
+            for video in candidates:
+                yield {
+                    "title": video["title"],
+                    "author": video["author"],
+                    "match_confidence": min(100, base_score),
+                    "media_type": MediaType.VIDEO_EPISODES,
+                    "uri": "youtube//" + video["url"],
+                    "playback": PlaybackType.VIDEO,
+                    "skill_icon": self.skill_icon,
+                    "skill_id": self.skill_id,
+                    "image": video["thumbnail"],
+                    "bg_image": video["thumbnail"]
+                }
+
+        # documentaries
+        if dtitle:
+            base_score += 20
+            candidates = [video for video in candidates
+                          if dtitle.lower() in video["title"].lower()]
+            for video in candidates:
+                yield {
+                    "title": video["title"],
+                    "author": video["author"],
+                    "match_confidence": min(100, base_score),
+                    "media_type": MediaType.DOCUMENTARY,
+                    "uri": "youtube//" + video["url"],
+                    "playback": PlaybackType.VIDEO,
+                    "skill_icon": self.skill_icon,
+                    "skill_id": self.skill_id,
+                    "image": video["thumbnail"],
+                    "bg_image": video["thumbnail"]
+                }
+
+        if skill:
+            yield self.get_playlist()
 
     @ocp_featured_media()
     def featured_media(self):
-        if self.lang.startswith("ru"):
-            return self.featured_media_en() + self.featured_media_ru()
-        return self.featured_media_en()
-
-    def featured_media_en(self):
         return [{
             "title": video["title"],
             "image": video["thumbnail"],
@@ -120,21 +193,16 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
             "skill_icon": self.skill_icon,
             "bg_image": video["thumbnail"],
             "skill_id": self.skill_id
-        } for video in self.archive.sorted_entries()]
-
-    def featured_media_ru(self):
-        return [{
-            "title": video["title"],
-            "image": video["thumbnail"],
-            "match_confidence": 70,
-            "media_type": MediaType.MOVIE,
-            "uri": "youtube//" + video["url"],
-            "playback": PlaybackType.VIDEO,
-            "skill_icon": self.skill_icon,
-            "bg_image": video["thumbnail"],
-            "skill_id": self.skill_id
-        } for video in self.archive_ru.sorted_entries()]
+        } for video in self.archive.values()]
 
 
-def create_skill():
-    return StarMediaSkill()
+if __name__ == "__main__":
+    from ovos_utils.messagebus import FakeBus
+
+    s = StarMediaSkill(bus=FakeBus(), skill_id="t.fake")
+    for r in s.search_db("Armed Love", MediaType.VIDEO_EPISODES):
+        print(r)
+        # {'title': 'Armed Love - Episode 2. Russian TV series. Сriminal Melodrama. English Subtitles. StarMedia', 'author': 'StarMediaEN', 'match_confidence': 60, 'media_type': <MediaType.VIDEO_EPISODES: 19>, 'uri': 'youtube//https://youtube.com/watch?v=khsu0pKhENM', 'playback': <PlaybackType.VIDEO: 1>, 'skill_icon': 'https://github.com/OpenVoiceOS/ovos-ocp-audio-plugin/raw/master/ovos_plugin_common_play/ocp/res/ui/images/ocp.png', 'skill_id': 't.fake', 'image': 'https://i.ytimg.com/vi/khsu0pKhENM/sddefault.jpg', 'bg_image': 'https://i.ytimg.com/vi/khsu0pKhENM/sddefault.jpg'}
+        # {'title': 'Armed Love - Episode 1. Russian TV series. Сriminal Melodrama. English Subtitles. StarMedia', 'author': 'StarMediaEN', 'match_confidence': 60, 'media_type': <MediaType.VIDEO_EPISODES: 19>, 'uri': 'youtube//https://youtube.com/watch?v=4-wbbW2ndH8', 'playback': <PlaybackType.VIDEO: 1>, 'skill_icon': 'https://github.com/OpenVoiceOS/ovos-ocp-audio-plugin/raw/master/ovos_plugin_common_play/ocp/res/ui/images/ocp.png', 'skill_id': 't.fake', 'image': 'https://i.ytimg.com/vi/4-wbbW2ndH8/sddefault.jpg', 'bg_image': 'https://i.ytimg.com/vi/4-wbbW2ndH8/sddefault.jpg'}
+        # {'title': 'Armed Love - Episode 3. Russian TV series. Сriminal Melodrama. English Subtitles. StarMedia', 'author': 'StarMediaEN', 'match_confidence': 60, 'media_type': <MediaType.VIDEO_EPISODES: 19>, 'uri': 'youtube//https://youtube.com/watch?v=oQ-xz-_qTgw', 'playback': <PlaybackType.VIDEO: 1>, 'skill_icon': 'https://github.com/OpenVoiceOS/ovos-ocp-audio-plugin/raw/master/ovos_plugin_common_play/ocp/res/ui/images/ocp.png', 'skill_id': 't.fake', 'image': 'https://i.ytimg.com/vi/oQ-xz-_qTgw/sddefault.jpg', 'bg_image': 'https://i.ytimg.com/vi/oQ-xz-_qTgw/sddefault.jpg'}
+        # {'title': 'Armed Love - Episode 4. Russian TV series. Сriminal Melodrama. English Subtitles. StarMedia', 'author': 'StarMediaEN', 'match_confidence': 60, 'media_type': <MediaType.VIDEO_EPISODES: 19>, 'uri': 'youtube//https://youtube.com/watch?v=510FsxZBYhQ', 'playback': <PlaybackType.VIDEO: 1>, 'skill_icon': 'https://github.com/OpenVoiceOS/ovos-ocp-audio-plugin/raw/master/ovos_plugin_common_play/ocp/res/ui/images/ocp.png', 'skill_id': 't.fake', 'image': 'https://i.ytimg.com/vi/510FsxZBYhQ/sddefault.jpg', 'bg_image': 'https://i.ytimg.com/vi/510FsxZBYhQ/sddefault.jpg'}
