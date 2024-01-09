@@ -14,7 +14,7 @@ class StarMediaSkill(OVOSCommonPlaybackSkill):
         self.supported_media = [MediaType.MOVIE,
                                 MediaType.DOCUMENTARY,
                                 MediaType.VIDEO_EPISODES]
-        self.skill_icon = self.default_bg = join(dirname(__file__), "ui", "starmedia_icon.jpg")
+        self.skill_icon = self.default_bg = join(dirname(__file__), "res", "starmedia_icon.jpg")
         self.archive = JsonStorageXDG("StarMedia", subfolder="OCP")
         self.archive_ru = JsonStorageXDG("StarMedia_ru", subfolder="OCP")
         self.media_type_exceptions = {}
